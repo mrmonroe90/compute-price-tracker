@@ -1,0 +1,6 @@
+__pycache__/
+.venv/
+*.pyc
+.env
+compute-price-tracker-BUILD-SPEC*.md
+private/
