@@ -105,10 +105,37 @@ permitted under §2 rule 2, which allows credentials for our own cloud accounts.
 The key is stored as GitHub Actions secret `GCP_BILLING_API_KEY` and in a local
 gitignored `.env`. It is never committed and never passed as a command argument.
 
-**Unverified:** Compute Engine service ID `6F81-5844-456A` (§3.4 flags it as needing
-confirmation). A wrong service ID **fails silently by returning an empty SKU list
+**Verified 2026-07-27:** Compute Engine service ID `6F81-5844-456A` resolves and returns Compute Engine SKUs
+(`resourceFamily: Compute`), confirming §3.4. A wrong service ID **fails silently by returning an empty SKU list
 rather than an error**, so the fetcher must assert a non-empty result and fail loudly
 on zero SKUs.
+
+Catalog survey, 31,561 SKUs across 7 pages:
+
+| # | Finding | Consequence |
+|---|---|---|
+| 10 | **Prices are `{units, nanos}`, not decimals.** `{"units":"0","nanos":77800000}` = $0.0778/hr. | `float(units)` yields **0.0 silently** for every sub-dollar SKU. Parse as `Decimal(units) + Decimal(nanos)/10**9`. |
+| 11 | **`usageType == "Spot"` does not exist** — 0 of 31,561. Spot rides under `Preemptible` with "Spot Preemptible" in the description (401 GPU SKUs). | §3.4's OnDemand/Preemptible match is right; filtering for "Spot" returns nothing. |
+| 12 | **`usageUnit` is not always hourly** — GPU-group SKUs include `GiBy.mo` alongside `h`. | Treating a GiB-month rate as hourly is off by ~730×. Assert `usageUnit == 'h'`. |
+| 13 | `tieredRates` has length 1 for all 2,080 GPU SKUs. | No tier-selection logic needed, but assert rather than assume. |
+
+**§3.4's pricing-shape hazard is broader than described — three shapes, not two.**
+H100 (370 SKUs), H200 (101), B200 (136), A100 (400), and L4 (173) all live in the
+`GPU` resource group. But A3 and A3Ultra additionally carry **family-specific CPU and
+RAM SKUs** (318 and 103 respectively, e.g. `"Reserved A3Ultra Ram in Hong Kong"`).
+An A3 machine price is therefore GPU SKU **plus** family CPU **plus** family RAM.
+Archiving only the `GPU` group would make A3/A4 machine prices unreconstructable.
+
+`A4X` (GB200 NVL72 class) returns **zero SKUs** — not yet priced. Watch item.
+
+**Topology is absent from the price feed, confirming §6.2 Rule B.** The SKU schema
+has no topology field (`category`, `description`, `geoTaxonomy`, `name`,
+`pricingInfo`, `serviceRegions`, `skuId`, `resourceFamily`, `resourceGroup`,
+`usageType`). Grepping all 31,561 descriptions for `nvlink|infiniband|rdma|fabric|
+interconnect` yields 130 hits, **all of them Cloud Interconnect** — a WAN peering
+product, not fabric. NVLink domain size, fabric type, and scale-out bandwidth must
+come from `hardware_catalog.yaml` joined on machine type, and must be resolved at
+ingest because they are not recoverable afterwards.
 
 ### 2.5 robots.txt behaviour
 
@@ -130,7 +157,8 @@ Under RFC 9309, absent robots.txt means unrestricted crawling. The checker must
 | D2 | Sources: Azure Retail + OpenRouter live; AWS spot built dark | Zero-grace-period sources first (§2.1). No AWS account exists yet. |
 | D3 | ~~GCP deferred to Week 2~~ **Superseded — see D3a** | Original rationale assumed no GCP account existed. That was wrong. |
 | D3a | **GCP raw capture in Week 1; parser in Week 2** | A GCP account exists, and there is no unauthenticated GCP pricing path (§2.4), so a key is mandatory — it is now set. GCP is zero-grace-period, so capture starts immediately. The §3.4 two-code-path parser (attached-GPU SKUs vs bundled machine types) is deferred to Week 2 without data cost, because D5's immutable raw archive lets that parser reconstruct history back to the first capture date. |
-| D4 | Store as gzipped raw JSON + daily Parquet in-repo; DuckDB for query | Deviates from §4/§5 (Postgres). No signup, no secrets, no free-tier pause risk. Date-partitioned files are append-only and git-friendly; a committed SQLite binary would be rewritten wholesale daily. DuckDB reads Parquet natively, which §4 already wants. Postgres migration in Week 2 is a straight load. |
+| D4 | ~~Gzipped raw JSON + Parquet, all in-repo~~ **Superseded — see D4a** | GCP's full catalog is 561 MB/yr gzipped, which git cannot absorb indefinitely. |
+| D4a | **Three-tier storage; no database at all** | Raw payloads → **GCS** (too big for git, never read in steady state). Parsed observations → **Parquet in git** (~20–30 MB/yr, versioned free, read by the site build). Published series → **static CSV/JSON on the CDN**. Postgres is dropped entirely: Cloud SQL's smallest always-on shape costs ~$51/mo, exceeding §4's whole budget, and DuckDB over Parquet does the job for $0. Closer to §4's original R2 intent than the in-repo scheme, using an existing GCP account. |
 | D5 | Persist raw payload archive **and** parsed observations | A parser bug found in Week 3 is repairable by re-parsing the archive. Without it, weeks of unrecoverable data are silently corrupt. |
 | D6 | UA points at a public GitHub repo until the domain exists | Resolves the §9 circular dependency (`/about-data` must exist before the first fetch, but the site is Week 4). |
 | D7 | Pin Python 3.12 via `uv` | Machine has 3.14.6; pyarrow/pandera support on 3.14 is not dependable yet. |
@@ -166,7 +194,7 @@ Compliance logic is deliberately separated from HTTP mechanics so the hard rules
 | `src/fetchers/openrouter.py` | Heterogeneous pricing dict → key/value rows | `base` |
 | `src/fetchers/gcp_catalog.py` | Billing Catalog paging; **archive only, no parsing this cycle** (D3a). Asserts non-empty SKU list. | `base` |
 | `src/fetchers/aws_spot.py` | boto3 spot history; built dark (`enabled: false`) | `base` |
-| `src/store/archive.py` | `data/raw/{source}/{date}.json.gz` + sha256 | — |
+| `src/store/archive.py` | Gzip + sha256, upload to GCS `gs://{bucket}/raw/{source}/{date}.json.gz` | — |
 | `src/store/observations.py` | Parquet writer, idempotency key | — |
 | `src/store/collection_log.py` | Per-run status, row counts, errors | — |
 
@@ -185,10 +213,11 @@ published number is re-derivable from an archived payload.
 config/
   sources.yaml          # tier, endpoint, cadence, rate limit, daily cap, enabled
   regions.yaml
-data/
-  raw/{source}/{YYYY-MM-DD}.json.gz
+data/                     # in git — small, versioned, read by the site build
   observations/{source}/{YYYY-MM-DD}.parquet
   collection_log.parquet
+# raw payloads live in GCS, not git:
+#   gs://{bucket}/raw/{source}/{YYYY-MM-DD}.json.gz
 src/compliance.py
 src/fetchers/{base,azure_retail,openrouter,gcp_catalog,aws_spot}.py
 src/store/{archive,observations,collection_log}.py
@@ -261,6 +290,45 @@ Stored as key/value rows: `(model_id, price_key, price_value)`. Non-scalar value
 (lists) are skipped and logged, never coerced. Values parsed to `Decimal`, never
 `float`. `is_free` flag set where price is zero. `context_length`, `created`, and
 `expiration_date` captured.
+
+---
+
+## 5a. Storage economics and the read path
+
+Rates queried live from GCP's own catalog on 2026-07-27.
+
+| Item | Rate | Our usage | Cost |
+|---|---|---|---|
+| GCS Standard storage | $0.020/GiB/mo | 561 MB/yr | **$0.13/yr** |
+| Class A ops (writes) | $0.000005–0.00001 | ~1,460/yr | **$0.015/yr** |
+| Class B ops (reads) | $0.0000004 | ~0 in steady state | ~$0 |
+| Egress to internet | $0.08/GiB | only on re-parse | **$0.04 per full re-read** |
+
+**Total ≈ $0.25/year.** For comparison, the cheapest always-on Cloud SQL Postgres
+(Zonal Enterprise, 1 vCPU, 3.75 GiB RAM, 10 GiB SSD) is $30.15 + $19.16 + $1.70 =
+**~$51/month**, which alone exceeds §4's entire budget.
+
+### The read path never touches GCS
+
+Egress at $0.08/GiB would scale with traffic if the site read from object storage.
+It does not:
+
+1. **Daily ingest** fetches, writes raw to GCS, then parses **the payload already in
+   memory** — it never reads back. GCS is write-only in the steady state.
+2. **Site build** reads Parquet from the git checkout, aggregates, and emits
+   downsampled CSV/JSON.
+3. **Pageviews** hit static files on Vercel's CDN. Zero GCS operations, zero egress.
+
+Serving cost is therefore **independent of traffic** — a front-page day costs the
+same as a quiet one.
+
+GCS is read only on a deliberate re-parse (a parser bug, or a new derived series
+needing history). Making that an explicit batch job rather than a live query is the
+correct design anyway: rewriting history should be reviewable, not silent.
+
+Downsampling ratio: ~2,080 GPU SKU observations/day at Tier 2 collapse to ~6
+accelerator index points/day at Tier 3 — a few thousand rows per year, single-digit
+KB, which is what the charts actually read.
 
 ---
 
@@ -354,6 +422,8 @@ BUILD-SPEC §14 items 1–6 (roofline parameters) are not blocking for this cycl
 | 1 | ~~Create public GitHub repo with `ABOUT-DATA.md`~~ | **Done 2026-07-27.** Live at https://github.com/mrmonroe90/compute-price-tracker; UA URL verified to return 200 to an unauthenticated request. |
 | 2 | ~~`gh auth login`~~ | **Done 2026-07-27** as `mrmonroe90`. |
 | 3 | Create AWS account, then a read-only IAM user | No — ~90-day grace period, but start it soon |
-| 4 | ~~Create GCP account + Billing Catalog API key~~ | **Done 2026-07-27.** Key set as repo secret `GCP_BILLING_API_KEY`. Raw capture moved into Week 1 (D3a). |
+| 4 | ~~Create GCP account + Billing Catalog API key~~ | **Done 2026-07-27.** First key was exposed and has been **rotated**; replacement is in repo secret `GCP_BILLING_API_KEY` (updated 19:59 UTC). Raw capture moved into Week 1 (D3a). |
+| 4a | Paste the rotated key into local `.env` | No — CI has it; only local verification is affected |
+| 4b | Create the GCS bucket and a service account with object-write scope | **Yes, before first GCP run** — needs `GCP_SA_KEY` as a repo secret |
 | 5 | ~~Which Azure regions to collect~~ | **Resolved 2026-07-27: `eastus` only for Week 1.** Accepted consequence: other regions are permanently absent from history before the date they are added. Revisit in Week 2 before the catalog work. |
 | 6 | Domain name | No — Week 4 |
