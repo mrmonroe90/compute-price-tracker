@@ -26,10 +26,12 @@ It is not a price comparison service, a reseller, or a procurement tool.
 |---|---|---|---|
 | Azure Retail Prices | `prices.azure.com/api/retail/prices` | daily | none — public API |
 | OpenRouter Models | `openrouter.ai/api/v1/models` | daily | none — public API |
+| GCP Cloud Billing Catalog | `cloudbilling.googleapis.com/v1/services/{id}/skus` | daily | API key for our own GCP account |
 | AWS EC2 Spot History | `DescribeSpotPriceHistory` via boto3 | daily | our own AWS account |
 | AWS EC2 Price List | public price list files | weekly | none |
 
-Azure region coverage is currently `eastus` only.
+Azure region coverage is currently `eastus` only. GCP collection covers the public
+Compute Engine SKU catalog, which is not region-scoped at the API level.
 
 ## How it behaves
 

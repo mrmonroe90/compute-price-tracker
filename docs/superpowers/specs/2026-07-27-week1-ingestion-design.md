@@ -9,14 +9,15 @@
 ## 1. Goal
 
 Get a compliant daily collector running unattended, writing GPU price observations
-with full provenance, for the sources that need no third-party credentials.
+with full provenance, for every source reachable today.
 
 Nothing else in the project matters until this is true. Layers 1–3, index
 construction, the roofline model, and the site each get their own design cycle.
 
 **Done when:** the daily GitHub Actions job has run unattended for 48 hours with
-Azure Retail and OpenRouter prices committed to the repo, with provenance, and a
-`collection_log` entry per run.
+Azure Retail and OpenRouter prices parsed and committed to the repo with full
+provenance, GCP payloads archived raw, and a `collection_log` entry per source per
+run.
 
 ---
 
@@ -86,7 +87,30 @@ Models carry an `expiration_date` field, so the model universe has entry and exi
 Index survivorship policy is deferred to the index design cycle, but the field is
 captured now.
 
-### 2.4 robots.txt behaviour
+### 2.4 GCP has no unauthenticated pricing path
+
+Probed 2026-07-27. A common assumption — reasonable, because Azure's Retail Prices
+API *is* fully unauthenticated — is that GCP offers an equivalent. It does not.
+
+| Endpoint | Result |
+|---|---|
+| `cloudbilling.googleapis.com/v1/services/{id}/skus`, no key | **403** — "Method doesn't allow unregistered callers" |
+| `cloudbilling.googleapis.com/v1/services`, no key | **403** |
+| `cloudbilling.googleapis.com/v1beta/skus`, no key | **404** — v1beta is **not GA**, answering §3.4's open question |
+| `cloudpricingcalculator.appspot.com/static/data/pricelist.json` | **404** — the legacy static price list is dead |
+
+An API key is mandatory. It requires no IAM permissions for public SKUs and is
+permitted under §2 rule 2, which allows credentials for our own cloud accounts.
+
+The key is stored as GitHub Actions secret `GCP_BILLING_API_KEY` and in a local
+gitignored `.env`. It is never committed and never passed as a command argument.
+
+**Unverified:** Compute Engine service ID `6F81-5844-456A` (§3.4 flags it as needing
+confirmation). A wrong service ID **fails silently by returning an empty SKU list
+rather than an error**, so the fetcher must assert a non-empty result and fail loudly
+on zero SKUs.
+
+### 2.5 robots.txt behaviour
 
 - `openrouter.ai/robots.txt` → HTTP 200, allows our path (`Disallow: /seo/` only).
 - `prices.azure.com/robots.txt` → **HTTP 404**.
@@ -104,7 +128,8 @@ Under RFC 9309, absent robots.txt means unrestricted crawling. The checker must
 |---|---|---|
 | D1 | Scope this cycle to Week 1 ingestion only | BUILD-SPEC §15. Layers 2–3 and the site get their own cycles. |
 | D2 | Sources: Azure Retail + OpenRouter live; AWS spot built dark | Zero-grace-period sources first (§2.1). No AWS account exists yet. |
-| D3 | GCP deferred to Week 2 | Needs an account that does not exist, and §3.4's two pricing shapes deserve dedicated attention. |
+| D3 | ~~GCP deferred to Week 2~~ **Superseded — see D3a** | Original rationale assumed no GCP account existed. That was wrong. |
+| D3a | **GCP raw capture in Week 1; parser in Week 2** | A GCP account exists, and there is no unauthenticated GCP pricing path (§2.4), so a key is mandatory — it is now set. GCP is zero-grace-period, so capture starts immediately. The §3.4 two-code-path parser (attached-GPU SKUs vs bundled machine types) is deferred to Week 2 without data cost, because D5's immutable raw archive lets that parser reconstruct history back to the first capture date. |
 | D4 | Store as gzipped raw JSON + daily Parquet in-repo; DuckDB for query | Deviates from §4/§5 (Postgres). No signup, no secrets, no free-tier pause risk. Date-partitioned files are append-only and git-friendly; a committed SQLite binary would be rewritten wholesale daily. DuckDB reads Parquet natively, which §4 already wants. Postgres migration in Week 2 is a straight load. |
 | D5 | Persist raw payload archive **and** parsed observations | A parser bug found in Week 3 is repairable by re-parsing the archive. Without it, weeks of unrecoverable data are silently corrupt. |
 | D6 | UA points at a public GitHub repo until the domain exists | Resolves the §9 circular dependency (`/about-data` must exist before the first fetch, but the site is Week 4). |
@@ -139,6 +164,7 @@ Compliance logic is deliberately separated from HTTP mechanics so the hard rules
 | `src/fetchers/base.py` | Session, rate limit, backoff, daily request cap. Calls the compliance gate before every request. | `compliance` |
 | `src/fetchers/azure_retail.py` | OData filter + paging, four-way `type` classification | `base` |
 | `src/fetchers/openrouter.py` | Heterogeneous pricing dict → key/value rows | `base` |
+| `src/fetchers/gcp_catalog.py` | Billing Catalog paging; **archive only, no parsing this cycle** (D3a). Asserts non-empty SKU list. | `base` |
 | `src/fetchers/aws_spot.py` | boto3 spot history; built dark (`enabled: false`) | `base` |
 | `src/store/archive.py` | `data/raw/{source}/{date}.json.gz` + sha256 | — |
 | `src/store/observations.py` | Parquet writer, idempotency key | — |
@@ -164,10 +190,10 @@ data/
   observations/{source}/{YYYY-MM-DD}.parquet
   collection_log.parquet
 src/compliance.py
-src/fetchers/{base,azure_retail,openrouter,aws_spot}.py
+src/fetchers/{base,azure_retail,openrouter,gcp_catalog,aws_spot}.py
 src/store/{archive,observations,collection_log}.py
 scripts/backfill_aws_spot.py
-tests/{test_compliance,test_azure_parse,test_openrouter_parse,test_idempotency}.py
+tests/{test_compliance,test_azure_parse,test_openrouter_parse,test_gcp_capture,test_idempotency}.py
 tests/fixtures/{azure_retail_eastus_nd.json,openrouter_models.json}
 docs/{source-verification,compliance-log,backlog-sources}.md
 .github/workflows/ingest-daily.yml
@@ -245,7 +271,7 @@ Enforced in code, not documentation, per §2.
 - **Denylist** — `coreweave.com`, `runpod.io` hard-coded in `compliance.py`, not
   read from config, so a careless config commit cannot add them.
 - **Tier gate** — any source not `tier: safe` raises loudly and refuses to run.
-- **Robots** — fetch once per host per run, cache for the run. 404 → allow (§2.4).
+- **Robots** — fetch once per host per run, cache for the run. 404 → allow (§2.5).
   Explicit `Disallow` match → refuse. Decision logged either way.
 - **Rate limit** — 1 req/sec per host default, exponential backoff on 429/5xx, hard
   daily request cap per source from config.
@@ -328,6 +354,6 @@ BUILD-SPEC §14 items 1–6 (roofline parameters) are not blocking for this cycl
 | 1 | ~~Create public GitHub repo with `ABOUT-DATA.md`~~ | **Done 2026-07-27.** Live at https://github.com/mrmonroe90/compute-price-tracker; UA URL verified to return 200 to an unauthenticated request. |
 | 2 | ~~`gh auth login`~~ | **Done 2026-07-27** as `mrmonroe90`. |
 | 3 | Create AWS account, then a read-only IAM user | No — ~90-day grace period, but start it soon |
-| 4 | Create GCP account + Billing Catalog API key | No — Week 2, but its data loss is ongoing |
+| 4 | ~~Create GCP account + Billing Catalog API key~~ | **Done 2026-07-27.** Key set as repo secret `GCP_BILLING_API_KEY`. Raw capture moved into Week 1 (D3a). |
 | 5 | ~~Which Azure regions to collect~~ | **Resolved 2026-07-27: `eastus` only for Week 1.** Accepted consequence: other regions are permanently absent from history before the date they are added. Revisit in Week 2 before the catalog work. |
 | 6 | Domain name | No — Week 4 |
