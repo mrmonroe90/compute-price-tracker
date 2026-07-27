@@ -325,8 +325,8 @@ BUILD-SPEC §14 items 1–6 (roofline parameters) are not blocking for this cycl
 
 | # | Item | Blocking? |
 |---|---|---|
-| 1 | Create public GitHub repo `mrmonroe90/compute-price-tracker` with `ABOUT-DATA.md` | **Yes** — the UA URL must resolve before the first fetch |
-| 2 | `gh auth login` | **Yes** — needed to push and enable Actions |
+| 1 | ~~Create public GitHub repo with `ABOUT-DATA.md`~~ | **Done 2026-07-27.** Live at https://github.com/mrmonroe90/compute-price-tracker; UA URL verified to return 200 to an unauthenticated request. |
+| 2 | ~~`gh auth login`~~ | **Done 2026-07-27** as `mrmonroe90`. |
 | 3 | Create AWS account, then a read-only IAM user | No — ~90-day grace period, but start it soon |
 | 4 | Create GCP account + Billing Catalog API key | No — Week 2, but its data loss is ongoing |
 | 5 | ~~Which Azure regions to collect~~ | **Resolved 2026-07-27: `eastus` only for Week 1.** Accepted consequence: other regions are permanently absent from history before the date they are added. Revisit in Week 2 before the catalog work. |
