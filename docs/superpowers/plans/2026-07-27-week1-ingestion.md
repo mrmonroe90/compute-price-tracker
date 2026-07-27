@@ -46,7 +46,7 @@
 
 ---
 
-## Task 1: Scaffolding and the compliance module
+### Task 1: Scaffolding and the compliance module
 
 **Files:**
 - Create: `pyproject.toml`, `config/sources.yaml`, `config/regions.yaml`
@@ -321,7 +321,7 @@ def load_sources(path: Path) -> dict:
 - [ ] **Step 8: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_compliance.py -v`
-Expected: PASS — 13 tests
+Expected: PASS — 16 tests (two are parametrized: 3 denylist hosts, 4 unsafe tiers)
 
 - [ ] **Step 9: Commit**
 
@@ -336,7 +336,7 @@ cannot add a prohibited source. robots.txt fails open on 404 per RFC
 
 ---
 
-## Task 2: BaseFetcher
+### Task 2: BaseFetcher
 
 **Files:**
 - Create: `src/cpt/fetchers/__init__.py`, `src/cpt/fetchers/base.py`
@@ -623,7 +623,7 @@ robots decision cached per host per run, then the daily cap."
 
 ---
 
-## Task 3: Immutable archive writer
+### Task 3: Immutable archive writer
 
 **Files:**
 - Create: `src/cpt/store/__init__.py`, `src/cpt/store/archive.py`
@@ -802,7 +802,7 @@ not by convention."
 
 ---
 
-## Task 4: Observations and collection log writers
+### Task 4: Observations and collection log writers
 
 **Files:**
 - Create: `src/cpt/store/observations.py`, `src/cpt/store/collection_log.py`
@@ -1114,7 +1114,7 @@ rejected at write time rather than published without a source."
 
 ---
 
-## Task 5: Azure Retail fetcher
+### Task 5: Azure Retail fetcher
 
 **Files:**
 - Create: `src/cpt/fetchers/azure_retail.py`
@@ -1410,7 +1410,7 @@ or spot."
 
 ---
 
-## Task 6: OpenRouter fetcher
+### Task 6: OpenRouter fetcher
 
 **Files:**
 - Create: `src/cpt/fetchers/openrouter.py`
@@ -1633,7 +1633,7 @@ keeps input, output, and cached prices as separate series."
 
 ---
 
-## Task 7: GCP catalog fetcher (archive only)
+### Task 7: GCP catalog fetcher (archive only)
 
 **Files:**
 - Create: `src/cpt/fetchers/gcp_catalog.py`
@@ -1831,7 +1831,7 @@ to history, since the archive is immutable."
 
 ---
 
-## Task 8: AWS spot fetcher (dark)
+### Task 8: AWS spot fetcher (dark)
 
 **Files:**
 - Create: `src/cpt/fetchers/aws_spot.py`, `scripts/backfill_aws_spot.py`
@@ -2119,7 +2119,7 @@ time. A test asserts the source stays disabled in the shipped config."
 
 ---
 
-## Task 9: Orchestrator CLI
+### Task 9: Orchestrator CLI
 
 **Files:**
 - Create: `src/cpt/cli.py`
@@ -2371,7 +2371,7 @@ Expected: PASS — 4 tests
 - [ ] **Step 5: Run the whole suite**
 
 Run: `uv run pytest -v`
-Expected: PASS — 53 tests
+Expected: PASS — 79 tests
 
 - [ ] **Step 6: Commit**
 
@@ -2385,7 +2385,7 @@ nonzero so GitHub Actions raises its failure alert."
 
 ---
 
-## Task 10: GitHub Actions workflow, GCS bucket, and docs
+### Task 10: GitHub Actions workflow, GCS bucket, and docs
 
 **Files:**
 - Create: `.github/workflows/ingest-daily.yml`
